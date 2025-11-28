@@ -1,0 +1,239 @@
+// Prisma Schema for Personal Finance Management Application
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+// Users Table - Simple user profiles for multi-user household tracking
+model User {
+  id               Int               @id @default(autoincrement())
+  name             String
+  isSystemAccount  Boolean           @default(false)  // True for "Household" system account
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  financialRecords FinancialRecord[]
+  debtMetadata     DebtMetadata[]
+  loans            Loan[]
+  debts            Debt[]
+  assets           Asset[]
+}
+
+// Categories Table - Financial categories with types
+// Types: Income, Fixed Expense, Dynamic Debt, Static Loan, Utility
+model Category {
+  id               Int               @id @default(autoincrement())
+  name             String
+  type             String            // Income | Fixed Expense | Dynamic Debt | Static Loan | Utility
+  isRecurring      Boolean           @default(false)
+  isStatic         Boolean           @default(false)  // Static = same amount monthly, Dynamic = varies
+  isHousehold      Boolean           @default(true)   // Household = shared/family, Individual = personal
+  defaultAmount    Float             @default(0)      // Default amount for static categories
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  financialRecords FinancialRecord[]
+
+  @@unique([name, type])
+}
+
+// Financial Records Table - Monthly financial entries
+model FinancialRecord {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  categoryId Int
+  amount     Float    @default(0)
+  monthYear  String   // Format: YYYY-MM
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId, monthYear])
+  @@index([userId])
+  @@index([categoryId])
+  @@index([monthYear])
+}
+
+// Loans Table - Fixed monthly payment loans (mortgage, car, student loans)
+model Loan {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  name            String
+  totalPrincipal  Float     // Original loan amount
+  remainingBalance Float    // Current remaining balance
+  interestRate    Float     @default(0)
+  monthlyPayment  Float     // Fixed monthly payment
+  startDate       DateTime  @default(now())
+  targetPayoffDate DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// Debts Table - Credit cards and variable paydown debts
+model Debt {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  name            String
+  currentBalance  Float     // Current usage/balance
+  creditLimit     Float     @default(0)  // Credit limit (0 = no limit / not applicable)
+  minimumPayment  Float     @default(0)  // Minimum required payment
+  isTemporary     Boolean   @default(false)  // Temporary = one-time debt, paid in full next month
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  payments     DebtPayment[]
+  transactions DebtTransaction[]
+
+  @@index([userId])
+}
+
+// Debt Payments Table - Monthly payments made on debts
+model DebtPayment {
+  id        Int      @id @default(autoincrement())
+  debtId    Int
+  amount    Float    // Amount paid this month
+  monthYear String   // Format: YYYY-MM
+  note      String?
+  createdAt DateTime @default(now())
+
+  debt Debt @relation(fields: [debtId], references: [id], onDelete: Cascade)
+
+  @@unique([debtId, monthYear])
+  @@index([debtId])
+  @@index([monthYear])
+}
+
+// Debt Transaction History - Track balance changes (purchases, adjustments)
+model DebtTransaction {
+  id          Int      @id @default(autoincrement())
+  debtId      Int
+  type        String   // 'purchase' | 'adjustment' | 'payment'
+  amount      Float    // Positive for purchases/increases, negative for payments/decreases
+  description String?
+  date        DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  debt Debt @relation(fields: [debtId], references: [id], onDelete: Cascade)
+
+  @@index([debtId])
+  @@index([date])
+}
+
+// Legacy - keeping for migration, will be removed
+model DebtMetadata {
+  id              Int       @id @default(autoincrement())
+  userId          Int
+  name            String
+  totalPrincipal  Float
+  interestRate    Float     @default(0)
+  monthlyPayment  Float     @default(0)
+  targetPayoffDate DateTime?
+  startDate       DateTime  @default(now())
+  debtType        String    @default("Static Loan")
+  remainingBalance Float?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ============================================
+// ASSETS & INVESTMENTS
+// ============================================
+
+// Assets Table - Tracks all types of assets and investments
+model Asset {
+  id                  Int       @id @default(autoincrement())
+  userId              Int
+  name                String
+  type                String    // 'emergency_fund' | 'education_fund' | 'espp' | 'rsu' | 'stock' | 'savings' | 'other'
+  
+  // Value tracking
+  currentValue        Float     @default(0)
+  costBasis           Float     @default(0)      // Total amount invested/deposited
+  
+  // For savings/funds with goals
+  targetAmount        Float?                     // Goal amount (e.g., 6 months expenses)
+  monthlyContribution Float     @default(0)      // Planned monthly contribution
+  
+  // For stocks/ESPP
+  symbol              String?                    // Stock ticker symbol
+  shares              Float     @default(0)      // Number of shares
+  currentPrice        Float?                     // Current price per share
+  
+  // For RSU
+  totalUnits          Float     @default(0)      // Total RSU units granted
+  vestedUnits         Float     @default(0)      // Units that have vested
+  unvestedUnits       Float     @default(0)      // Units pending vesting
+  vestingSchedule     String?                    // JSON: vesting schedule details
+  grantDate           DateTime?                  // Date RSUs were granted
+  vestingEndDate      DateTime?                  // When all units vest
+  
+  // For ESPP
+  discountPercent     Float     @default(15)     // ESPP discount (usually 15%)
+  purchasePeriodStart DateTime?
+  purchasePeriodEnd   DateTime?
+  contributionPercent Float     @default(0)      // % of salary contributing
+  
+  // General
+  institution         String?                    // Bank/Broker name
+  accountNumber       String?                    // Last 4 digits for reference
+  notes               String?
+  isActive            Boolean   @default(true)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  user         User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions AssetTransaction[]
+  history      AssetValueHistory[]
+
+  @@index([userId])
+  @@index([type])
+}
+
+// Asset Transactions - Track deposits, withdrawals, buys, sells, vests
+model AssetTransaction {
+  id           Int      @id @default(autoincrement())
+  assetId      Int
+  type         String   // 'deposit' | 'withdraw' | 'buy' | 'sell' | 'vest' | 'dividend' | 'contribution'
+  amount       Float    // Money amount
+  units        Float?   // Shares/units (for stocks)
+  pricePerUnit Float?   // Price per share at transaction
+  date         DateTime @default(now())
+  note         String?
+  createdAt    DateTime @default(now())
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@index([assetId])
+  @@index([date])
+}
+
+// Asset Value History - Track value over time for charts
+model AssetValueHistory {
+  id        Int      @id @default(autoincrement())
+  assetId   Int
+  value     Float
+  monthYear String   // Format: YYYY-MM
+  createdAt DateTime @default(now())
+
+  asset Asset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+
+  @@unique([assetId, monthYear])
+  @@index([assetId])
+  @@index([monthYear])
+}
+
